@@ -65,12 +65,13 @@ register_mechanism(Mechanism, Module, RequirePlainPassword) ->
 %%-include("ejabberd.hrl").
 %%-include("jlib.hrl").
 %%check_authzid(_State, Props) ->
-%%    AuthzId = xml:get_attr_s(authzid, Props),
+%%    AuthzId = proplists:get_value(authzid, Props),
 %%    case jlib:binary_to_jid(AuthzId) of
 %%	error ->
 %%	    {error, "invalid-authzid"};
 %%	JID ->
-%%	    LUser = jlib:nodeprep(xml:get_attr_s(username, Props)),
+%%	    Username = proplists:get_value(username, Props),
+%%	    LUser = jlib:nodeprep(Username),
 %%	    {U, S, R} = jlib:jid_tolower(JID),
 %%	    case R of
 %%		"" ->
@@ -86,7 +87,7 @@ register_mechanism(Mechanism, Module, RequirePlainPassword) ->
 %%    end.
 
 check_credentials(_State, Props) ->
-    User = xml:get_attr_s(username, Props),
+    User = proplists:get_value(username, Props),
     case jlib:nodeprep(User) of
 	error ->
 	    {error, <<"not-authorized">>};

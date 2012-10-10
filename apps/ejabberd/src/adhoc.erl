@@ -39,9 +39,9 @@
 %% an {error, ErrorType} tuple.
 parse_request(#iq{type = set, lang = Lang, sub_el = SubEl, xmlns = ?NS_COMMANDS}) ->
     ?DEBUG("entering parse_request...", []),
-    Node = xml:get_tag_attr_s(<<"node">>, SubEl),
-    SessionID = xml:get_tag_attr_s(<<"sessionid">>, SubEl),
-    Action = xml:get_tag_attr_s(<<"action">>, SubEl),
+    Node = exml_query:attr(SubEl, <<"node">>),
+    SessionID = exml_query:attr(SubEl, <<"sessionid">>),
+    Action = exml_query:attr(SubEl, <<"action">>),
     XData = find_xdata_el(SubEl),
     {xmlelement, _, _, AllEls} = SubEl,
     Others = case XData of
@@ -67,7 +67,7 @@ find_xdata_el({xmlelement, _Name, _Attrs, SubEls}) ->
 find_xdata_el1([]) ->
     false;
 find_xdata_el1([{xmlelement, Name, Attrs, SubEls} | Els]) ->
-    case xml:get_attr_s(<<"xmlns">>, Attrs) of
+    case exml_query:attr(Attrs, <<"xmlns">>) of
         ?NS_XDATA ->
             {xmlelement, Name, Attrs, SubEls};
         _ ->

@@ -274,19 +274,19 @@ get_subscribed(FsmRef) ->
 %%          {stop, Reason, NewStateData}
 %%----------------------------------------------------------------------
 
-wait_for_stream({xmlstreamstart, _Name, Attrs}, StateData) ->
+wait_for_stream({xmlstreamstart, _Name, _Attrs} = El, StateData) ->
     DefaultLang = case ?MYLANG of
               undefined ->
               "en";
               DL ->
               DL
     end,
-    case xml:get_attr_s(<<"xmlns:stream">>, Attrs) of
+    case exml_query:attr(El, <<"xmlns:stream">>) of
         ?NS_STREAM ->
-            Server = jlib:nameprep(xml:get_attr_s(<<"to">>, Attrs)),
+            Server = jlib:nameprep(exml_query:attr(El, <<"to">>)),
             case lists:member(Server, ?MYHOSTS) of
                 true ->
-                    Lang = case xml:get_attr_s(<<"xml:lang">>, Attrs) of
+                    Lang = case exml_query:attr(El, <<"xml:lang">>) of
                         Lang1 when size(Lang1) =< 35 ->
                             %% As stated in BCP47, 4.4.1:
                             %% Protocols or specifications that
@@ -300,7 +300,7 @@ wait_for_stream({xmlstreamstart, _Name, Attrs}, StateData) ->
                             ""
                     end,
                     change_shaper(StateData, jlib:make_jid(<<>>, Server, <<>>)),
-                    case xml:get_attr_s(<<"version">>, Attrs) of
+                    case exml_query:attr(El, <<"version">>) of
                         <<"1.0">> ->
                             send_header(StateData, Server, "1.0", DefaultLang),
                             case StateData#state.authenticated of
@@ -615,10 +615,10 @@ wait_for_feature_request({xmlelement, Name, Attrs, Els} = El, StateData) ->
     TLSEnabled = StateData#state.tls_enabled,
     TLSRequired = StateData#state.tls_required,
     SockMod = (StateData#state.sockmod):get_sockmod(StateData#state.socket),
-    case {xml:get_attr_s(<<"xmlns">>, Attrs), Name} of
+    case {exml_query:attr(El, <<"xmlns">>), Name} of
     {?NS_SASL, <<"auth">>} when not ((SockMod == gen_tcp) and TLSRequired) ->
-        Mech = xml:get_attr_s(<<"mechanism">>, Attrs),
-        ClientIn = jlib:decode_base64(xml:get_cdata(Els)),
+        Mech = exml_query:attr(El, <<"mechanism">>),
+        ClientIn = jlib:decode_base64(exml_query:cdata(El)),
         case cyrsasl:server_start(StateData#state.sasl_state,
                       Mech,
                       ClientIn) of
@@ -628,8 +628,8 @@ wait_for_feature_request({xmlelement, Name, Attrs, Els} = El, StateData) ->
             send_element(StateData,
                  {xmlelement, <<"success">>,
                   [{<<"xmlns">>, ?NS_SASL}], []}),
-            U = xml:get_attr_s(username, Props),
-            AuthModule = xml:get_attr_s(auth_module, Props),
+            U = proplists:get_value(username, Props),
+            AuthModule = proplists:get_value(auth_module, Props),
             ?INFO_MSG("(~w) Accepted authentication for ~s by ~p",
                   [StateData#state.socket, U, AuthModule]),
             fsm_next_state(wait_for_stream,
@@ -680,7 +680,7 @@ wait_for_feature_request({xmlelement, Name, Attrs, Els} = El, StateData) ->
         Socket = StateData#state.socket,
         TLSSocket = (StateData#state.sockmod):starttls(
               Socket, TLSOpts,
-              xml:element_to_binary(
+              exml:to_binary(
                 {xmlelement, <<"proceed">>, [{<<"xmlns">>, ?NS_TLS}], []})),
         fsm_next_state(wait_for_stream,
                StateData#state{socket = TLSSocket,
@@ -690,20 +690,20 @@ wait_for_feature_request({xmlelement, Name, Attrs, Els} = El, StateData) ->
     {?NS_COMPRESS_BIN, <<"compress">>} when Zlib == true,
                     ((SockMod == gen_tcp) or
                      (SockMod == tls)) ->
-        case xml:get_subtag(El, <<"method">>) of
-        false ->
+        case exml_query:subelement(El, <<"method">>) of
+        undefined ->
             send_element(StateData,
                  {xmlelement, <<"failure">>,
                   [{<<"xmlns">>, ?NS_COMPRESS}],
                   [{xmlelement, <<"setup-failed">>, [], []}]}),
             fsm_next_state(wait_for_feature_request, StateData);
         Method ->
-            case xml:get_tag_cdata(Method) of
+            case exml_query:cdata(Method) of
             <<"zlib">> ->
                 Socket = StateData#state.socket,
                 ZlibSocket = (StateData#state.sockmod):compress(
                        Socket,
-                       xml:element_to_binary(
+                       exml:to_binary(
                          {xmlelement, <<"compressed">>,
                           [{<<"xmlns">>, ?NS_COMPRESS}], []})),
                 fsm_next_state(wait_for_stream,
@@ -752,9 +752,9 @@ wait_for_feature_request(closed, StateData) ->
 
 
 wait_for_sasl_response({xmlelement, Name, Attrs, Els} = El, StateData) ->
-    case {xml:get_attr_s(<<"xmlns">>, Attrs), Name} of
+    case {exml_query:attr(El, <<"xmlns">>), Name} of
     {?NS_SASL, <<"response">>} ->
-        ClientIn = jlib:decode_base64(xml:get_cdata(Els)),
+        ClientIn = jlib:decode_base64(exml_query:cdata(El)),
         case cyrsasl:server_step(StateData#state.sasl_state,
                      ClientIn) of
         {ok, Props} ->
@@ -763,8 +763,8 @@ wait_for_sasl_response({xmlelement, Name, Attrs, Els} = El, StateData) ->
             send_element(StateData,
                  {xmlelement, <<"success">>,
                   [{<<"xmlns">>, ?NS_SASL}], []}),
-            U = xml:get_attr_s(username, Props),
-            AuthModule = xml:get_attr_s(auth_module, Props),
+            U = proplists:get_value(username, Props),
+            AuthModule = proplists:get_value(auth_module, Props),
             ?INFO_MSG("(~w) Accepted authentication for ~s by ~p",
                   [StateData#state.socket, U, AuthModule]),
             fsm_next_state(wait_for_stream,
@@ -824,7 +824,7 @@ wait_for_bind({xmlelement, _, _, _} = El, StateData) ->
     case jlib:iq_query_info(El) of
     #iq{type = set, xmlns = ?NS_BIND, sub_el = SubEl} = IQ ->
         U = StateData#state.user,
-        R1 = xml:get_path_s(SubEl, [{elem, <<"resource">>}, cdata]),
+        R1 = exml_query:path(SubEl, [{element, <<"resource">>}, cdata]),
         R = case jlib:resourceprep(R1) of
             error -> error;
             <<>> ->

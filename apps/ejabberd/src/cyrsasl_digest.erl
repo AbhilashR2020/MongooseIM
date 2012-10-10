@@ -62,21 +62,22 @@ mech_step(#state{step = 3, nonce = Nonce} = State, ClientIn) ->
 	bad ->
 	    {error, <<"bad-protocol">>};
 	KeyVals ->
-	    DigestURI = xml:get_attr_s(<<"digest-uri">>, KeyVals),
-	    UserName = xml:get_attr_s(<<"username">>, KeyVals),
+            DigestURI = proplists:get_value(<<"digest-uri">>, KeyVals),
+            UserName = proplists:get_value(<<"username">>, KeyVals),
 	    case is_digesturi_valid(DigestURI, State#state.host) of
 		false ->
 		    ?DEBUG("User login not authorized because digest-uri "
 			   "seems invalid: ~p", [DigestURI]),
 		    {error, <<"not-authorized">>, UserName};
 		true ->
-		    AuthzId = xml:get_attr_s(<<"authzid">>, KeyVals),
+                    AuthzId = proplists:get_value(<<"authzid">>, KeyVals),
 		    case (State#state.get_password)(UserName) of
 			{false, _} ->
 			    {error, <<"not-authorized">>, UserName};
 			{Passwd, AuthModule} ->
+                                Response = proplists:get_value(<<"response">>, KeyVals),
 				case (State#state.check_password)(UserName, <<>>,
-					xml:get_attr_s(<<"response">>, KeyVals),
+					Response,
 					fun(PW) -> response(KeyVals, UserName, PW, Nonce, AuthzId,
 						<<"AUTHENTICATE">>) end) of
 				{true, _} ->
@@ -191,11 +192,11 @@ hex(<<N, Ns/binary>>, Res) ->
 
 
 response(KeyVals, User, Passwd, Nonce, AuthzId, A2Prefix) ->
-    Realm = xml:get_attr_s(<<"realm">>, KeyVals),
-    CNonce = xml:get_attr_s(<<"cnonce">>, KeyVals),
-    DigestURI = xml:get_attr_s(<<"digest-uri">>, KeyVals),
-    NC = xml:get_attr_s(<<"nc">>, KeyVals),
-    QOP = xml:get_attr_s(<<"qop">>, KeyVals),
+    Realm = proplists:get_value(<<"realm">>, KeyVals, <<>>),
+    CNonce = proplists:get_value(<<"cnonce">>, KeyVals, <<>>),
+    DigestURI = proplists:get_value(<<"digest-uri">>, KeyVals, <<>>),
+    NC = proplists:get_value(<<"nc">>, KeyVals, <<>>),
+    QOP = proplists:get_value(<<"qop">>, KeyVals, <<>>),
     A1 = case AuthzId of
 	     <<>> ->
 		 list_to_binary(
