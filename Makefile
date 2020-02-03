@@ -1,95 +1,69 @@
-.PHONY: rel deps test show_test_results generate_snmp_header 
+.PHONY: rel
 
-EJABBERD_DIR = apps/ejabberd
-EJD_INCLUDE = $(EJABBERD_DIR)/include
-EJD_PRIV = $(EJABBERD_DIR)/priv
-EJD_PRIV_MIB = $(EJD_PRIV)/mibs
-EJD_MIB = $(EJABBERD_DIR)/mibs
-DEVNODES = node1 node2
-TESTNODES = internal_mnesia internal_redis odbc_mnesia odbc_redis external_mnesia external_redis
+RUN=./tools/silent_exec.sh "$@.log"
+XEP_TOOL = tools/xep_tool
+EBIN = ebin
+DEVNODES = mim1 mim2 mim3 fed1 reg1
+REBAR=./rebar3
 
-all: deps compile
+# Top-level targets aka user interface
 
-compile: rebar generate_snmp_header
-	./rebar compile
+all: rel
 
-deps: rebar generate_snmp_header
-	./rebar get-deps
+clean:
+	-rm -rf asngen
+	-rm -rf _build
+	-rm rel/configure.vars.config
+	-rm rel/vars.config
 
-clean: rebar
-	./rebar clean
+# REBAR_CT_EXTRA_ARGS comes from a test runner
+ct:
+	@(if [ "$(SUITE)" ]; \
+		then $(RUN) $(REBAR) ct --dir test --suite $(SUITE) ; \
+		else $(RUN) $(REBAR) ct $(REBAR_CT_EXTRA_ARGS); fi)
 
-test: test_deps
-	cd test/ejabberd_tests; make test
+rel: certs configure.out rel/vars.config
+	. ./configure.out && $(REBAR) as prod release
 
-cover_test: test_deps
-	cd test/ejabberd_tests; make cover_test
+shell: certs etc/mongooseim.cfg
+	$(REBAR) shell
 
-show_test_results:
-	$$BROWSER `ls -td test/ct_report/ct_run.test@*/index.html | head -n 1` & disown
+# Top-level targets' dependency chain
 
-eunit: rebar
-	./rebar skip_deps=true eunit
+rock:
+	@if [ "$(FILE)" ]; then elvis rock $(FILE);\
+	elif [ "$(BRANCH)" ]; then tools/rock_changed.sh $(BRANCH); \
+	else tools/rock_changed.sh; fi
 
-rel: rebar deps
-	./rebar compile generate -f
+rel/vars.config: rel/vars.config.in rel/configure.vars.config
+	cat $^ > $@
+
+## Don't allow these files to go out of sync!
+configure.out rel/configure.vars.config:
+	./tools/configure with-all without-jingle-sip
+
+etc/mongooseim.cfg:
+	@mkdir -p $(@D)
+	tools/generate_cfg.es etc/mongooseim.cfg rel/files/mongooseim.cfg
 
 devrel: $(DEVNODES)
 
-testrel: $(DEVNODES) $(TESTNODES)
+print_devnodes:
+	@echo $(DEVNODES)
 
-$(DEVNODES) $(TESTNODES): rebar deps compile deps_dev
+$(DEVNODES): certs configure.out rel/vars.config
 	@echo "building $@"
-	(cd rel && ../rebar generate -f target_dir=../dev/ejabberd_$@ overlay_vars=./reltool_vars/$@_vars.config)
-	cp apps/ejabberd/src/*.erl dev/ejabberd_$@/lib/ejabberd-2.1.8/ebin/
-ifeq ($(shell uname), Linux)
-	cp -R `dirname $(shell readlink -f $(shell which erl))`/../lib/tools-* dev/ejabberd_$@/lib/
-else
-	cp -R `which erl`/../../lib/tools-* dev/ejabberd_$@/lib/
-endif
+	(. ./configure.out && \
+	DEVNODE=true $(RUN) $(REBAR) as $@ release)
 
-deps_dev:
-	mkdir -p dev
-	cp rel/files/test_cert.pem /tmp/server.pem
-	cp rel/files/sample_external_auth.py /tmp
+certs:
+	cd tools/ssl && $(MAKE)
 
-devclean:
-	rm -rf dev/*
+xeplist:
+	escript $(XEP_TOOL)/xep_tool.escript markdown $(EBIN)
 
-generate_snmp_header: apps/ejabberd/include/EJABBERD-MIB.hrl
+install: configure.out rel
+	@. ./configure.out && tools/install
 
-$(EJD_INCLUDE)/EJABBERD-MIB.hrl: $(EJD_PRIV_MIB)/EJABBERD-MIB.bin
-	erlc -o $(EJD_INCLUDE) $<
-
-$(EJD_PRIV_MIB)/EJABBERD-MIB.bin: $(EJD_MIB)/EJABBERD-MIB.mib $(EJD_MIB)/EJABBERD-MIB.funcs
-	erlc -o $(EJD_PRIV_MIB) $<
-
-relclean:
-	rm -rf rel/ejabberd
-
-COMBO_PLT = $(HOME)/.esl_ejabberd_combo_dialyzer_plt
-PLT_LIBS  = $(wildcard rel/ejabberd/lib/*/ebin)
-
-DIALYZER_APPS = ejabberd
-DIALYZER_APPS_PATHS = $(addsuffix /ebin, $(addprefix apps/, $(DIALYZER_APPS)))
-
-check_plt: rel
-	dialyzer --check_plt --plt $(COMBO_PLT) $(PLT_LIBS)
-
-build_plt: rel
-	dialyzer --build_plt --output_plt $(COMBO_PLT) $(PLT_LIBS)
-
-dialyzer: compile
-	dialyzer -Wno_return --fullpath --plt $(COMBO_PLT) $(DIALYZER_APPS_PATHS) | \
-	    fgrep -v -f ./dialyzer.ignore-warnings
-
-cleanplt:
-	rm $(COMBO_PLT)
-
-test_deps: rebar
-	./rebar -C rebar.tests.config get-deps
-
-rebar:
-	wget -q http://cloud.github.com/downloads/basho/rebar/rebar
-	chmod u+x rebar
-
+elvis:
+	$(REBAR) as lint lint
