@@ -24,6 +24,7 @@
 
 -include("jlib.hrl").
 -include("mongoose.hrl").
+-include("mod_http_upload.hrl").
 
 -define(DEFAULT_TOKEN_BYTES, 32).
 -define(DEFAULT_MAX_FILE_SIZE, 10 * 1024 * 1024). % 10 MB
@@ -53,6 +54,7 @@
 start(Host, Opts) ->
     IQDisc = gen_mod:get_opt(iqdisc, Opts, one_queue),
     SubHost = subhost(Host),
+    maybe_init_table(Opts),
     mod_disco:register_subhost(Host, SubHost),
     mongoose_subhosts:register(Host, SubHost),
     ejabberd_hooks:add(disco_local_features, SubHost, ?MODULE, get_disco_features, 90),
@@ -280,3 +282,15 @@ is_positive_integer(_) -> false.
 config_metrics(Host) ->
     OptsToReport = [{backend, s3}], %list of tuples {option, defualt_value}
     mongoose_module_metrics:opts_for_module(Host, ?MODULE, OptsToReport).
+
+maybe_init_table(Opts) ->
+    case proplists:get_value(backend, Opts, undefined) of
+        undefined -> ok;
+        eazi  ->
+            EaziOpts = gen_mod:get_opt(eazi, Opts),
+            _UrlPrefix = gen_mod:get_opt(url_prefix, EaziOpts),
+            mnesia:create_table(file_upload,
+                                [{ram_copies, [node()]},
+                                {attributes, record_info(fields, file_upload)}]),
+            mnesia:add_table_copy(file_upload, node(), ram_copies)
+    end.
