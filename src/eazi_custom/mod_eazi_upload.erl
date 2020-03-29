@@ -89,6 +89,7 @@ content_types_provided(Req, State) ->
   {[{cow_mimetypes:web(Path), download}], Req, State}.
     
 content_types_accepted(Req, State) ->
+    io:fwrite("~nHeaders:~p~n", [cowboy_req:headers(Req)]),
     CTA = [{'*', upload}],
     {CTA, Req, State}.
 
@@ -186,23 +187,54 @@ download(Req, State) ->
   {stop, Req2, State}.
 
 %% @doc Called for a method of type "POST" and "PUT"
-upload(Req, State) ->                      
-    {ok, Headers, Req2} = cowboy_req:read_part(Req),
-    {ok, Data, Req3} = cowboy_req:read_part_body(Req2),
-    {file, FileHead, Filename, ContentType}
-      = cow_multipart:form_data(Headers),
+
+upload(Req, State) ->
+    {Data, Req2} = acc_multipart(Req, []),
+	
+	[{Headers, Body}] = Data,
+	
+	{_HeaderPart_1, HeaderPart_2 } = cow_multipart:parse_content_disposition(erlang:term_to_binary(Headers)),
+	{<<"filename">>, FilenameBin} = lists:keyfind(<<"filename">>, 1, HeaderPart_2),
+	FileName = erlang:binary_to_list(FilenameBin),
     <<"/media/", Path/binary>> = cowboy_req:path(Req),
     DirName = filename:dirname(Path),
-    Dir = <<?DIR_PREFIX/binary, DirName/binary, "/" >>,
+    Dir = erlang:binary_to_list(<<?DIR_PREFIX/binary, DirName/binary, "/" >>),
     JID = cowboy_req:header(<<"jid">>, Req, undefined),
     ok = filelib:ensure_dir(Dir),
-    lager:warning("Directory created, JID:~p", [JID]),
-    io:format("Received ~p file ~p of content-type ~p ~n~n",
-      [FileHead, Path, ContentType]),
-    file:write_file(Path, Data),
-    spawn(fun() -> create_thumbnail(Dir, Filename, JID) end),
-    Req4 = cowboy_req:reply(200, Req3),
-    {stop, Req4, State}.
+
+	%% Put the file into the current directory
+	FileWriteRes = file:write_file(Dir ++ FileName, Body),
+	spawn(fun() -> create_thumbnail(Dir, FileName, JID) end),
+	lager:warning("Recived file has been saved ~p", 
+							  [[{headers, Headers},
+							  {result, FileWriteRes},
+							  {fileName, FileName},
+							  {path, os:cmd("pwd")}]
+							 ]),
+	
+	%%{Data, Req2},
+    Headers1 = #{<<"content-type">> => <<"application/json">>},
+    Req3 = cowboy_req:reply(200, Headers1, <<"{}">>, Req2),
+    {stop, Req3, State}.
+
+acc_multipart(Req0, Acc) ->
+	case cowboy_req:read_part(Req0) of
+		{ok, Headers, Req1} ->
+			{ok, Body, Req} = stream_body(Req1, <<>>),
+			acc_multipart(Req, [{Headers, Body}|Acc]);
+		{done, Req} ->
+			{lists:reverse(Acc), Req}
+	end.
+
+stream_body(Req0, Acc) ->
+	case cowboy_req:read_part_body(Req0) of
+		{more, Data, Req} ->
+			stream_body(Req, << Acc/binary, Data/binary >>);
+		{ok, Data, Req} ->
+			{ok, << Acc/binary, Data/binary >>, Req}
+	end.
+
+
 
 -spec handler_path(ejabberd_cowboy:path(), mongoose_commands:t(), [{atom(), term()}]) ->
     ejabberd_cowboy:route().
@@ -214,21 +246,37 @@ handler_path(Base, Command, ExtraOpts) ->
 -spec create_thumbnail(Dir ::binary(), Path :: ejabberd_cowboy:path(), _JId :: binary()) ->
     ok | {error, Reason :: term()}.
 create_thumbnail(Dir, Filename, _JId) ->
-    ThumbNailDir = <<Dir/binary, "thumbnail/">>,
+    ThumbNailDir = Dir ++ "thumbnail/",
+    Command = case cow_mimetypes:web(list_to_binary(Filename)) of
+        {<<"image">>, _, _} ->
+            image_thumbnail(Dir, Filename, ThumbNailDir);
+        {<<"video">>, _, _} ->
+            Duration = video_duration(Dir, Filename),
+            Sample = Duration div 5,
+            video_thumbnail(Dir, Filename, ThumbNailDir, Sample);
+        _ ->
+            undefined
+        end,
+    io:fwrite("Command:~p", [Command]),
+    Result = os:cmd(Command),
+    io:fwrite("Result:~p", [Result]).
+
+image_thumbnail(Dir, File, ThumbNailDir) ->
     ok = filelib:ensure_dir(ThumbNailDir),
-    CommandBin = <<"convert -resize 200x200 ", Dir/binary, Filename/binary,
-                    " ", ThumbNailDir/binary, Filename/binary>>,
-    Command = binary_to_list(CommandBin),
-    lager:warning("Executing commmand:~p", [Command]),
-    try
-        case os:cmd(Command) of
-            [] ->
-                lager:warning("Created thumbnail");
-            Else ->
-                lager:warning("Cannot create thumbnail:~p", [Else])
-        end
-    catch
-        Err:Reason ->
-            lager:error("Cannot create thumbnail:~p", [{Err, Reason}])
-    end,
-    ok.
+    lists:flatten(["convert -resize 200x200 ", Dir, File,
+                   " ", ThumbNailDir, File]).
+
+video_thumbnail(Dir, File, ThumbNailDir, Sample) ->
+    FilePrefix = filename:rootname(File),
+    FilePath = Dir ++ File,
+    ok = filelib:ensure_dir(ThumbNailDir),
+    lists:flatten(["ffmpeg -i ", FilePath, " -vf fps=1/",
+                    integer_to_list(Sample), " ", ThumbNailDir,
+                    FilePrefix, "%01d.jpeg"]).
+
+video_duration(Dir, File) ->
+    FilePath = Dir ++ File,
+    Cmd = "ffmpeg -i " ++ FilePath ++" 2>&1 | grep Duration | awk '{print $2}' | tr -d ,",
+    Result = os:cmd(Cmd),
+    [H, M, S, _Mi] = [list_to_integer(X) || X <- string:tokens(Result, ":.\n")],
+    S + (M*60) + (H*3600).

@@ -111,15 +111,19 @@ compose_url(UrlPrefix, UUID, Filename, ExpirationTime) ->
     {ok, {slot_created, <<Url/binary, Query/binary>>, Url}}.
 
 validate(Path, Queries) ->
-    #{<<"token">> := Token, <<"expires">> := Expires} = Queries,    
-    case mnesia:dirty_read(file_upload, Path) of
-        [] ->
-            {error, not_found};
-        [#file_upload{token = Token, expires = Expires}] ->
-            {true, Path};
-        Else ->
-            lager:warning("Validation failed:~p", [{Else, Path, Queries}]),
-            {error, unauthorized}
+    case Queries of
+        #{<<"token">> := Token, <<"expires">> := Expires} ->
+            case mnesia:dirty_read(file_upload, Path) of
+                [] ->
+                    {error, not_found};
+                [#file_upload{token = Token, expires = Expires}] ->
+                    {true, Path};
+                Else ->
+                    lager:warning("Validation failed:~p", [{Else, Path, Queries}]),
+                    {error, unauthorized}
+            end;
+        _ ->
+            {error, not_found}
     end.
             
 
