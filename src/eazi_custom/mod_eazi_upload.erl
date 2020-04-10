@@ -23,6 +23,7 @@
          content_types_accepted/2,
          delete_resource/2,
          resource_exists/2,
+         authorize/2,
          is_authorized/2]).
 %% local callbacks
 -export([download/2, upload/2]).
@@ -48,7 +49,7 @@
 %% Returns list of all available http paths.
 -spec cowboy_router_paths(ejabberd_cowboy:path(), ejabberd_cowboy:options()) ->
     ejabberd_cowboy:implemented_result().
-cowboy_router_paths(Base, Opts) ->
+cowboy_router_paths(_Base, _Opts) ->
     ejabberd_hooks:add(register_command, global, mongoose_api_common, reload_dispatches, 50),
     ejabberd_hooks:add(unregister_command, global, mongoose_api_common, reload_dispatches, 50),
         try
@@ -168,9 +169,6 @@ authorize(ControlCreds, {AuthMethod, User, Password}) ->
 compare_creds({User, Pass}, {User, Pass}) -> true;
 compare_creds(_, _) -> false.
 
-get_control_creds(#http_api_state{auth = Creds}) ->
-    Creds.
-
 %%--------------------------------------------------------------------
 %% Internal funs
 %%--------------------------------------------------------------------
@@ -234,32 +232,28 @@ stream_body(Req0, Acc) ->
 			{ok, << Acc/binary, Data/binary >>, Req}
 	end.
 
-
-
--spec handler_path(ejabberd_cowboy:path(), mongoose_commands:t(), [{atom(), term()}]) ->
-    ejabberd_cowboy:route().
-handler_path(Base, Command, ExtraOpts) ->
-    {[Base, mongoose_api_common:create_admin_url_path(Command)],
-        ?MODULE, [{command_category, mongoose_commands:category(Command)},
-                  {command_subcategory, mongoose_commands:subcategory(Command)} | ExtraOpts]}.
-
--spec create_thumbnail(Dir ::binary(), Path :: ejabberd_cowboy:path(), _JId :: binary()) ->
+-spec create_thumbnail(Dir :: string(), Filename :: string(), _JId :: binary()) ->
     ok | {error, Reason :: term()}.
 create_thumbnail(Dir, Filename, _JId) ->
     ThumbNailDir = Dir ++ "thumbnail/",
     Command = case cow_mimetypes:web(list_to_binary(Filename)) of
         {<<"image">>, _, _} ->
-            image_thumbnail(Dir, Filename, ThumbNailDir);
+            {ok, image_thumbnail(Dir, Filename, ThumbNailDir)};
         {<<"video">>, _, _} ->
             Duration = video_duration(Dir, Filename),
             Sample = Duration div 5,
-            video_thumbnail(Dir, Filename, ThumbNailDir, Sample);
-        _ ->
-            undefined
+            {ok, video_thumbnail(Dir, Filename, ThumbNailDir, Sample)};
+        Reason ->
+            {error, Reason}
         end,
     io:fwrite("Command:~p", [Command]),
-    Result = os:cmd(Command),
-    io:fwrite("Result:~p", [Result]).
+    case Command of
+        {ok, Cmd} ->
+            Result = os:cmd(Cmd),
+            io:fwrite("Result:~p", [Result]);
+        {error, Reason1} ->
+            {error, Reason1}
+    end.
 
 image_thumbnail(Dir, File, ThumbNailDir) ->
     ok = filelib:ensure_dir(ThumbNailDir),
